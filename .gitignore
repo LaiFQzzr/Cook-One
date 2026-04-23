@@ -39,3 +39,7 @@ output/
 playwright-browser/
 
 HowToCook*.zip
+
+node_modules
+server.log
+server.err
