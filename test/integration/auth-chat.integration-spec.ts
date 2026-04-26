@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import * as request from 'supertest';
 import { AuthModule } from '../../src/auth/auth.module';
 import { ChatModule } from '../../src/chat/chat.module';
@@ -12,6 +13,13 @@ describe('Auth + Chat Integration', () => {
   beforeAll(async () => {
     const moduleRef: TestingModule = await Test.createTestingModule({
       imports: [
+        TypeOrmModule.forRoot({
+          type: 'sqljs',
+          autoSave: false,
+          location: ':memory:',
+          entities: [__dirname + '/../../src/**/*.entity{.ts,.js}'],
+          synchronize: true,
+        }),
         ConfigModule.forRoot({
           isGlobal: true,
           load: [

@@ -5,6 +5,10 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { AuthModule } from './auth/auth.module';
 import { ChatModule } from './chat/chat.module';
 import { RecipesModule } from './recipes/recipes.module';
+import { AchievementsModule } from './achievements/achievements.module';
+import { ShoppingModule } from './shopping/shopping.module';
+import { MealPlansModule } from './meal-plans/meal-plans.module';
+import { PreferencesModule } from './preferences/preferences.module';
 
 @Module({
   imports: [
@@ -31,6 +35,10 @@ import { RecipesModule } from './recipes/recipes.module';
     AuthModule,
     ChatModule,
     RecipesModule,
+    AchievementsModule,
+    ShoppingModule,
+    MealPlansModule,
+    PreferencesModule,
   ],
 })
 export class AppModule {}

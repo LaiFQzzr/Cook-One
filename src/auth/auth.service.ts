@@ -5,6 +5,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import { User } from './entities/user.entity';
+import { AchievementsService } from '../achievements/achievements.service';
 
 @Injectable()
 export class AuthService {
@@ -13,6 +14,7 @@ export class AuthService {
     private readonly configService: ConfigService,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    private readonly achievementsService: AchievementsService,
   ) {}
 
   /**
@@ -34,6 +36,13 @@ export class AuthService {
     });
 
     await this.userRepository.save(user);
+
+    // 初始化用户成就记录
+    try {
+      await this.achievementsService.initUserAchievements(user.id);
+    } catch (e) {
+      // 成就初始化失败不影响注册主流程
+    }
 
     return { message: '注册成功', userId: user.id };
   }

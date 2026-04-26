@@ -6,7 +6,10 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { runPythonScript } from '../common/utils/python-runner';
+import { Recipe } from './entities/recipe.entity';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -26,6 +29,11 @@ export class RecipesService implements OnModuleInit {
     lastUpdate?: Date;
   } = {};
 
+  constructor(
+    @InjectRepository(Recipe)
+    private readonly recipeRepo: Repository<Recipe>,
+  ) {}
+
   /**
    * 应用启动时自动更新一次菜谱数据
    */
@@ -33,6 +41,7 @@ export class RecipesService implements OnModuleInit {
     this.logger.log('RecipesService initialized, checking for data...');
     try {
       await this.loadData();
+      await this.syncToDatabase();
       this.logger.log(`Loaded ${this.cache.list?.length ?? 0} recipes from cache`);
     } catch (error) {
       this.logger.warn(
@@ -63,7 +72,7 @@ export class RecipesService implements OnModuleInit {
   }
 
   /**
-   * 手动触发更新菜谱数据
+   * 手动触发更新菜谱数据（并同步到数据库）
    */
   async updateRecipes(): Promise<{
     success: boolean;
@@ -79,6 +88,7 @@ export class RecipesService implements OnModuleInit {
       });
 
       await this.loadData();
+      await this.syncToDatabase();
 
       return {
         success: true,
@@ -92,6 +102,49 @@ export class RecipesService implements OnModuleInit {
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
+  }
+
+  /**
+   * 将 JSON 缓存同步到数据库（UPSERT）
+   */
+  async syncToDatabase(): Promise<{ synced: number }> {
+    const recipes = this.cache.full ?? [];
+    if (recipes.length === 0) {
+      return { synced: 0 };
+    }
+
+    let synced = 0;
+    for (const r of recipes) {
+      const exists = await this.recipeRepo.findOne({ where: { id: r.id } });
+      const entity = this.recipeRepo.create({
+        id: r.id,
+        name: r.name,
+        category: r.category,
+        category_en: r.category_en,
+        difficulty: r.difficulty ?? 0,
+        difficulty_label: r.difficulty_label,
+        description: r.description,
+        servings: r.servings,
+        image: r.image,
+        ingredients: r.ingredients,
+        steps: r.steps,
+        tips: r.tips,
+        nutrition: r.nutrition,
+        tools: r.tools,
+        tags: r.tags,
+        references: r.references,
+      });
+
+      if (exists) {
+        await this.recipeRepo.update({ id: r.id }, entity);
+      } else {
+        await this.recipeRepo.save(entity);
+      }
+      synced++;
+    }
+
+    this.logger.log(`Synced ${synced} recipes to database`);
+    return { synced };
   }
 
   /**
@@ -129,7 +182,7 @@ export class RecipesService implements OnModuleInit {
   }
 
   /**
-   * 获取单个菜谱详情
+   * 获取单个菜谱详情（优先内存缓存）
    */
   async getRecipeById(id: string): Promise<any> {
     await this.ensureDataLoaded();
@@ -139,6 +192,13 @@ export class RecipesService implements OnModuleInit {
       throw new HttpException('菜谱不存在', HttpStatus.NOT_FOUND);
     }
     return recipe;
+  }
+
+  /**
+   * 从数据库获取菜谱详情（供其他模块关联查询使用）
+   */
+  async getRecipeByIdFromDb(id: string): Promise<Recipe | null> {
+    return this.recipeRepo.findOne({ where: { id } });
   }
 
   /**

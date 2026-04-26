@@ -2,16 +2,17 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
-import request from 'supertest';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import * as request from 'supertest';
 import { RecipesModule } from '../../src/recipes/recipes.module';
 import { AuthModule } from '../../src/auth/auth.module';
 import * as fs from 'fs';
 
-jest.mock('fs');
-
 describe('Recipes Integration', () => {
   let app: INestApplication;
   let authToken: string;
+  let existsSyncSpy: jest.SpyInstance;
+  let readFileSyncSpy: jest.SpyInstance;
 
   const mockRecipesList = {
     recipes: Array.from({ length: 5 }, (_, i) => ({
@@ -49,18 +50,33 @@ describe('Recipes Integration', () => {
   const mockMetadata = { total_recipes: 5, version: '1.0' };
 
   beforeAll(async () => {
-    (fs.existsSync as jest.Mock).mockReturnValue(true);
-    (fs.readFileSync as jest.Mock).mockImplementation((path: string) => {
-      if (path.includes('recipes_list.json')) return JSON.stringify(mockRecipesList);
-      if (path.includes('recipes_full.json')) return JSON.stringify(mockRecipesFull);
-      if (path.includes('recipes_by_category.json')) return JSON.stringify(mockByCategory);
-      if (path.includes('ingredients_index.json')) return JSON.stringify(mockIngredients);
-      if (path.includes('metadata.json')) return JSON.stringify(mockMetadata);
+    const originalExistsSync = fs.existsSync;
+    const originalReadFileSync = fs.readFileSync;
+    existsSyncSpy = jest.spyOn(fs, 'existsSync').mockImplementation((path: any) => {
+      const p = path.toString();
+      if (p.includes('sql.js') || p.endsWith('.wasm')) return originalExistsSync(path);
+      return true;
+    });
+    readFileSyncSpy = jest.spyOn(fs, 'readFileSync').mockImplementation((path: any, options?: any) => {
+      const p = path.toString();
+      if (p.includes('sql.js') || p.endsWith('.wasm')) return originalReadFileSync(path, options);
+      if (p.includes('recipes_list.json')) return JSON.stringify(mockRecipesList);
+      if (p.includes('recipes_full.json')) return JSON.stringify(mockRecipesFull);
+      if (p.includes('recipes_by_category.json')) return JSON.stringify(mockByCategory);
+      if (p.includes('ingredients_index.json')) return JSON.stringify(mockIngredients);
+      if (p.includes('metadata.json')) return JSON.stringify(mockMetadata);
       return '{}';
     });
 
     const moduleRef: TestingModule = await Test.createTestingModule({
       imports: [
+        TypeOrmModule.forRoot({
+          type: 'sqljs',
+          autoSave: false,
+          location: ':memory:',
+          entities: [__dirname + '/../../src/**/*.entity{.ts,.js}'],
+          synchronize: true,
+        }),
         ConfigModule.forRoot({ isGlobal: true }),
         ScheduleModule.forRoot(),
         AuthModule,
@@ -84,6 +100,8 @@ describe('Recipes Integration', () => {
   });
 
   afterAll(async () => {
+    existsSyncSpy.mockRestore();
+    readFileSyncSpy.mockRestore();
     await app.close();
   });
 
@@ -139,12 +157,10 @@ describe('Recipes Integration', () => {
   });
 
   it('POST /recipes/update should trigger update (requires auth)', async () => {
-    // 未认证应 401
     await request(app.getHttpServer())
       .post('/recipes/update')
       .expect(401);
 
-    // 认证后应 200
     const res = await request(app.getHttpServer())
       .post('/recipes/update')
       .set('Authorization', `Bearer ${authToken}`)

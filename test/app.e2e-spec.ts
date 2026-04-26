@@ -2,36 +2,56 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import * as request from 'supertest';
-import { AppModule } from '../src/app.module';
+import { AuthModule } from '../src/auth/auth.module';
+import { ChatModule } from '../src/chat/chat.module';
+import { RecipesModule } from '../src/recipes/recipes.module';
 import * as fs from 'fs';
-
-jest.mock('fs');
 
 describe('AppController (e2e)', () => {
   let app: INestApplication;
+  let existsSyncSpy: jest.SpyInstance;
+  let readFileSyncSpy: jest.SpyInstance;
 
   beforeAll(async () => {
-    (fs.existsSync as jest.Mock).mockReturnValue(true);
-    (fs.readFileSync as jest.Mock).mockImplementation((path: string) => {
-      if (path.includes('recipes_list.json'))
+    const originalExistsSync = fs.existsSync;
+    const originalReadFileSync = fs.readFileSync;
+    existsSyncSpy = jest.spyOn(fs, 'existsSync').mockImplementation((path: any) => {
+      const p = path.toString();
+      if (p.includes('sql.js') || p.endsWith('.wasm')) return originalExistsSync(path);
+      return true;
+    });
+    readFileSyncSpy = jest.spyOn(fs, 'readFileSync').mockImplementation((path: any, options?: any) => {
+      const p = path.toString();
+      if (p.includes('sql.js') || p.endsWith('.wasm')) return originalReadFileSync(path, options);
+      if (p.includes('recipes_list.json'))
         return JSON.stringify({ recipes: [{ id: '1', name: '测试菜' }] });
-      if (path.includes('recipes_full.json'))
+      if (p.includes('recipes_full.json'))
         return JSON.stringify({ recipes: [{ id: '1', name: '测试菜', ingredients: [], steps: [] }] });
-      if (path.includes('recipes_by_category.json'))
+      if (p.includes('recipes_by_category.json'))
         return JSON.stringify({ categories: [{ name: '测试', count: 1, recipes: [] }] });
-      if (path.includes('ingredients_index.json'))
+      if (p.includes('ingredients_index.json'))
         return JSON.stringify({ ingredients: [{ name: '测试食材', frequency: 1 }] });
-      if (path.includes('metadata.json'))
+      if (p.includes('metadata.json'))
         return JSON.stringify({ total_recipes: 1 });
       return '{}';
     });
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [
+        TypeOrmModule.forRoot({
+          type: 'sqljs',
+          autoSave: false,
+          location: ':memory:',
+          entities: [__dirname + '/../src/**/*.entity{.ts,.js}'],
+          synchronize: true,
+        }),
         ConfigModule.forRoot({ isGlobal: true }),
         ScheduleModule.forRoot(),
-        AppModule,
+        AuthModule,
+        ChatModule,
+        RecipesModule,
       ],
     }).compile();
 
@@ -41,6 +61,8 @@ describe('AppController (e2e)', () => {
   });
 
   afterAll(async () => {
+    existsSyncSpy.mockRestore();
+    readFileSyncSpy.mockRestore();
     await app.close();
   });
 
@@ -213,7 +235,6 @@ describe('AppController (e2e)', () => {
 
   describe('CORS & App Bootstrap', () => {
     it('should start successfully and respond to health-like requests', () => {
-      // /recipes 作为可用性探测
       return request(app.getHttpServer())
         .get('/recipes')
         .expect(200);

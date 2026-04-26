@@ -1,6 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { HttpException, Logger } from '@nestjs/common';
+import { getRepositoryToken } from '@nestjs/typeorm';
 import { RecipesService } from './recipes.service';
+import { Recipe } from './entities/recipe.entity';
 import * as pythonRunner from '../common/utils/python-runner';
 import * as fs from 'fs';
 
@@ -47,8 +49,18 @@ describe('RecipesService', () => {
       return '{}';
     });
 
+    const mockRecipeRepository = {
+      findOne: jest.fn(),
+      create: jest.fn(),
+      save: jest.fn(),
+      update: jest.fn(),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
-      providers: [RecipesService],
+      providers: [
+        RecipesService,
+        { provide: getRepositoryToken(Recipe), useValue: mockRecipeRepository },
+      ],
     }).compile();
 
     service = module.get<RecipesService>(RecipesService);
