@@ -84,4 +84,13 @@ export class RecipesController {
   async getRecipeById(@Param('id') id: string) {
     return this.recipesService.getRecipeById(id);
   }
+
+  /**
+   * GET /recipes/:id/ingredients
+   * 获取某个菜谱所需的所有食材及用量
+   */
+  @Get(':id/ingredients')
+  async getRecipeIngredients(@Param('id') id: string) {
+    return this.recipesService.getRecipeIngredients(id);
+  }
 }

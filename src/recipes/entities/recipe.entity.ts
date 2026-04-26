@@ -4,7 +4,9 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
+  OneToMany,
 } from 'typeorm';
+import { RecipeIngredient as RecipeIngredientEntity } from './recipe-ingredient.entity';
 
 export interface RecipeIngredient {
   name: string;
@@ -68,6 +70,9 @@ export class Recipe {
 
   @Column({ type: 'json', nullable: true })
   references: string[];
+
+  @OneToMany(() => RecipeIngredientEntity, (ri) => ri.recipe)
+  recipeIngredients: RecipeIngredientEntity[];
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

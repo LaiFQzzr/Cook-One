@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS recipes (
   nutrition JSON COMMENT '营养信息',
   tools JSON COMMENT '工具数组',
   tags JSON COMMENT '标签数组',
-  references JSON COMMENT '参考链接数组',
+  ref_links JSON COMMENT '参考链接数组',
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   INDEX idx_category (category),
@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS shopping_items (
   note VARCHAR(255) COMMENT '备注',
   recipe_id VARCHAR(100) COMMENT '来源菜谱ID',
   meal_plan_id INT COMMENT '来源备餐计划ID',
-  is_checked BOOLEAN DEFAULT FALSE COMMENT '是否已采购',
+  is_checked TINYINT(1) DEFAULT 0 COMMENT '是否已采购(0-未采购,1-已采购)',
   sort_order INT DEFAULT 0 COMMENT '排序',
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -146,6 +146,33 @@ CREATE TABLE IF NOT EXISTS user_preferences (
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   UNIQUE KEY uk_user_pref (user_id, preference_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------
+-- 9. 食材表 (ingredients)
+--    保存去重后的标准化食材
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ingredients (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(100) NOT NULL UNIQUE COMMENT '食材名称',
+  category VARCHAR(50) COMMENT '食材分类',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------
+-- 10. 食谱-食材关联表 (recipe_ingredients)
+--     记录每个食谱所需的具体食材及用量
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS recipe_ingredients (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  recipe_id VARCHAR(100) NOT NULL COMMENT '菜谱ID',
+  ingredient_id INT NOT NULL COMMENT '食材ID',
+  amount VARCHAR(100) COMMENT '用量/数量',
+  is_optional TINYINT(1) DEFAULT 0 COMMENT '是否可选(0-必需,1-可选)',
+  note TEXT COMMENT '备注',
+  FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE CASCADE,
+  FOREIGN KEY (ingredient_id) REFERENCES ingredients(id) ON DELETE CASCADE,
+  UNIQUE KEY uk_recipe_ingredient (recipe_id, ingredient_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================

@@ -10,6 +10,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { runPythonScript } from '../common/utils/python-runner';
 import { Recipe } from './entities/recipe.entity';
+import { Ingredient } from './entities/ingredient.entity';
+import { RecipeIngredient } from './entities/recipe-ingredient.entity';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -32,6 +34,10 @@ export class RecipesService implements OnModuleInit {
   constructor(
     @InjectRepository(Recipe)
     private readonly recipeRepo: Repository<Recipe>,
+    @InjectRepository(Ingredient)
+    private readonly ingredientRepo: Repository<Ingredient>,
+    @InjectRepository(RecipeIngredient)
+    private readonly recipeIngredientRepo: Repository<RecipeIngredient>,
   ) {}
 
   /**
@@ -143,8 +149,162 @@ export class RecipesService implements OnModuleInit {
       synced++;
     }
 
+    // 同步食材数据到独立表
+    await this.syncIngredientsToDatabase(recipes);
+
     this.logger.log(`Synced ${synced} recipes to database`);
     return { synced };
+  }
+
+  /**
+   * 同步食材及食谱-食材关联到独立表
+   */
+  private async syncIngredientsToDatabase(recipes: any[]): Promise<void> {
+    // 1. 收集所有唯一食材名称（拆分复合食材）
+    const ingredientNameSet = new Set<string>();
+    for (const r of recipes) {
+      const ingredients: any[] = r.ingredients ?? [];
+      for (const ing of ingredients) {
+        if (ing.name) {
+          const subNames = this.splitIngredientName(ing.name.trim());
+          for (const n of subNames) {
+            ingredientNameSet.add(n);
+          }
+        }
+      }
+    }
+
+    if (ingredientNameSet.size === 0) {
+      return;
+    }
+
+    // 2. 批量 upsert 食材主表
+    const ingredientNames = Array.from(ingredientNameSet);
+    const ingredientEntities = ingredientNames.map((name) =>
+      this.ingredientRepo.create({ name }),
+    );
+
+    await this.ingredientRepo.upsert(ingredientEntities, ['name']);
+
+    // 3. 查询所有食材建立 name -> id 映射
+    const allIngredients = await this.ingredientRepo.find();
+    const ingredientMap = new Map<string, number>();
+    for (const ing of allIngredients) {
+      ingredientMap.set(ing.name, ing.id);
+    }
+
+    // 4. 构建并 upsert 食谱-食材关联表（拆分复合食材）
+    const recipeIngredientEntities: RecipeIngredient[] = [];
+    for (const r of recipes) {
+      const ingredients: any[] = r.ingredients ?? [];
+      for (const ing of ingredients) {
+        const rawName = ing.name?.trim();
+        if (!rawName) continue;
+
+        const subNames = this.splitIngredientName(rawName);
+        for (const name of subNames) {
+          const ingredientId = ingredientMap.get(name);
+          if (!ingredientId) continue;
+
+          recipeIngredientEntities.push(
+            this.recipeIngredientRepo.create({
+              recipe_id: r.id,
+              ingredient_id: ingredientId,
+              amount: ing.amount ?? null,
+              is_optional: ing.is_optional ?? false,
+              note: ing.note ?? null,
+            }),
+          );
+        }
+      }
+    }
+
+    if (recipeIngredientEntities.length > 0) {
+      await this.recipeIngredientRepo.upsert(recipeIngredientEntities, [
+        'recipe_id',
+        'ingredient_id',
+      ]);
+    }
+
+    this.logger.log(
+      `Synced ${ingredientNames.length} ingredients and ${recipeIngredientEntities.length} recipe-ingredient relations`,
+    );
+  }
+
+  /**
+   * 拆分复合食材名称
+   *
+   * 例如：
+   * - "油、盐、生抽、老抽" -> ["油", "盐", "生抽", "老抽"]
+   * - "白醋/米醋" -> ["白醋", "米醋"]
+   * - "黑虎虾 or 明虾" -> ["黑虎虾", "明虾"]
+   * - "肉蟹 1 只  份数" -> ["肉蟹"]
+   * - "葱 = 一根大葱" -> ["葱"]
+   */
+  private splitIngredientName(rawName: string): string[] {
+    if (!rawName) return [];
+
+    // 替换替代分隔符为顿号
+    let text = rawName
+      .replace(/\s+or\s+/gi, '、')
+      .replace(/\s*\/\s*/g, '、')
+      .replace(/\s*\+\s*/g, '、');
+
+    // 按分隔符拆分
+    const parts = text.split(/[、，,]/);
+
+    const results: string[] = [];
+    for (let part of parts) {
+      part = part.trim();
+      if (!part) continue;
+
+      // 去掉前缀标记
+      part = part.replace(/^(主料|辅料|必备|可选|必选|工具)[：:]?\s*/i, '');
+
+      // 去掉括号及内容
+      part = part.replace(/[（(][^）)]*[）)]/g, '');
+
+      // 去掉 = 或 : 后面的内容（保留前面）
+      const colonIndex = part.search(/[:=：＝]/);
+      if (colonIndex > 0) {
+        part = part.substring(0, colonIndex).trim();
+      }
+
+      // 过滤注释行
+      if (/^注[：:]?/.test(part)) continue;
+
+      // 过滤纯数字
+      if (/^\d+(\.\d+)?$/.test(part)) continue;
+
+      // 过滤纯操作/状态词
+      const skipPatterns = [
+        /小火/, /中火/, /大火/, /文火/, /武火/,
+        /三成热/, /五成热/, /七成热/, /八成热/,
+        /油温/, /少许/, /适量/, /若干/, /备用/, /待用/,
+        /根据口味/, /根据喜好/, /^等等$/, /^约$/, /^左右$/,
+      ];
+      if (skipPatterns.some((p) => p.test(part))) continue;
+
+      // 去掉尾部阿拉伯数字+单位/量词
+      part = part.replace(
+        /\s+\d[\d\s\.\-/~×xX\+\=]*[gmlkL个只份勺瓶包袋盒罐条根片块头尾把株颗粒碗盘杯张件套双打捆扎斤两钱吨磅cm毫米微米纳米]?$/i,
+        '',
+      );
+      // 去掉尾部中文数字+常见量词
+      part = part.replace(
+        /\s+[一二两三四五六七八九十百千万亿]+[个只份勺瓶包袋盒罐条根片块头尾把株颗粒碗盘杯张件套双]+$/,
+        '',
+      );
+      // 去掉尾部常见量词/描述
+      part = part.replace(/\s+(份数|适量|少许|若干|备用|待用|约|左右)$/i, '');
+
+      part = part.trim();
+      if (part && part.length >= 1) {
+        results.push(part);
+      }
+    }
+
+    return results;
   }
 
   /**
@@ -210,7 +370,7 @@ export class RecipesService implements OnModuleInit {
   }
 
   /**
-   * 搜索食材
+   * 搜索食材（基于内存索引）
    */
   async searchIngredients(query?: string, limit = 20): Promise<any[]> {
     await this.ensureDataLoaded();
@@ -234,6 +394,145 @@ export class RecipesService implements OnModuleInit {
         last_update: this.cache.lastUpdate,
       }
     );
+  }
+
+  /**
+   * 获取某个菜谱所需的所有食材及用量（从独立表查询）
+   */
+  async getRecipeIngredients(recipeId: string): Promise<{
+    recipeId: string;
+    ingredients: Array<{
+      id: number;
+      name: string;
+      amount: string | null;
+      is_optional: boolean;
+      note: string | null;
+    }>;
+  }> {
+    const recipe = await this.recipeRepo.findOne({
+      where: { id: recipeId },
+    });
+    if (!recipe) {
+      throw new HttpException('菜谱不存在', HttpStatus.NOT_FOUND);
+    }
+
+    const relations = await this.recipeIngredientRepo.find({
+      where: { recipe_id: recipeId },
+      relations: ['ingredient'],
+      order: { id: 'ASC' },
+    });
+
+    return {
+      recipeId,
+      ingredients: relations.map((ri) => ({
+        id: ri.ingredient.id,
+        name: ri.ingredient.name,
+        amount: ri.amount,
+        is_optional: ri.is_optional,
+        note: ri.note,
+      })),
+    };
+  }
+
+  /**
+   * 获取食材列表（从独立表查询）
+   */
+  async getIngredients(options?: {
+    search?: string;
+    category?: string;
+    page?: number;
+    limit?: number;
+  }): Promise<{
+    total: number;
+    page: number;
+    limit: number;
+    data: Ingredient[];
+  }> {
+    const limit = Math.min(options?.limit ?? 20, 100);
+    const page = options?.page ?? 1;
+
+    const qb = this.ingredientRepo.createQueryBuilder('i');
+
+    if (options?.search) {
+      qb.where('i.name LIKE :search', { search: `%${options.search}%` });
+    }
+
+    if (options?.category) {
+      if (options.search) {
+        qb.andWhere('i.category = :category', { category: options.category });
+      } else {
+        qb.where('i.category = :category', { category: options.category });
+      }
+    }
+
+    const total = await qb.getCount();
+    const data = await qb
+      .skip((page - 1) * limit)
+      .take(limit)
+      .orderBy('i.name', 'ASC')
+      .getMany();
+
+    return { total, page, limit, data };
+  }
+
+  /**
+   * 获取使用某食材的所有菜谱
+   */
+  async getRecipesByIngredient(
+    ingredientId: number,
+    options?: { page?: number; limit?: number },
+  ): Promise<{
+    ingredientId: number;
+    ingredientName: string;
+    total: number;
+    page: number;
+    limit: number;
+    recipes: Array<{
+      id: string;
+      name: string;
+      category: string;
+      amount: string | null;
+      is_optional: boolean;
+      note: string | null;
+    }>;
+  }> {
+    const ingredient = await this.ingredientRepo.findOne({
+      where: { id: ingredientId },
+    });
+    if (!ingredient) {
+      throw new HttpException('食材不存在', HttpStatus.NOT_FOUND);
+    }
+
+    const limit = Math.min(options?.limit ?? 20, 100);
+    const page = options?.page ?? 1;
+
+    const qb = this.recipeIngredientRepo
+      .createQueryBuilder('ri')
+      .leftJoinAndSelect('ri.recipe', 'recipe')
+      .where('ri.ingredient_id = :ingredientId', { ingredientId })
+      .orderBy('recipe.name', 'ASC');
+
+    const total = await qb.getCount();
+    const relations = await qb
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getMany();
+
+    return {
+      ingredientId,
+      ingredientName: ingredient.name,
+      total,
+      page,
+      limit,
+      recipes: relations.map((ri) => ({
+        id: ri.recipe.id,
+        name: ri.recipe.name,
+        category: ri.recipe.category,
+        amount: ri.amount,
+        is_optional: ri.is_optional,
+        note: ri.note,
+      })),
+    };
   }
 
   /**

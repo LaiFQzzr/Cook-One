@@ -85,7 +85,14 @@
                                     Node.js 定时任务/手动触发
                                            ↓
                                     内存缓存 ←→ REST API
+                                           ↓
+                              syncToDatabase()
+                                           ↓
+                              recipes 表 + ingredients 表 + recipe_ingredients 关联表
 ```
+- 食材数据从 JSON `ingredients` 数组中解析，通过 `syncIngredientsToDatabase()` 同步到独立表
+- `ingredients` 表保存去重后的标准化食材
+- `recipe_ingredients` 关联表保存具体用量 (`amount`, `is_optional`, `note`)
 
 ### 3. 认证策略
 - JWT Bearer Token，过期时间 7 天
@@ -194,3 +201,4 @@ npm run test:e2e       # E2E + 集成测试（test/**/*.e2e-spec.ts + **/*.integ
 3. **chat 接口返回 201**：`ChatController.chat()` 未加 `@HttpCode(200)`，默认返回 201
 4. **SSE 流式响应**：`chatStream` 直接操作 `res.write()`，不走 NestJS 默认序列化，测试中需验证 `Content-Type: text/event-stream`
 5. **Windows 环境**：Python 调用使用 `python` 命令而非 `python3`，确保 Python 在 PATH 中
+6. **RecipeIngredient 命名冲突**：`recipe.entity.ts` 中已定义 `RecipeIngredient` 接口（JSON 结构），新增实体使用别名导入 `import { RecipeIngredient as RecipeIngredientEntity }`，避免类型冲突

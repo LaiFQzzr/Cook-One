@@ -101,52 +101,137 @@ def clean_text(text: str) -> str:
     return text.strip()
 
 
-def parse_ingredient_line(line: str) -> Optional[Ingredient]:
-    """解析食材行"""
+def split_composite_ingredient(name: str) -> List[str]:
+    """
+    拆分复合食材名称。
+
+    支持的分隔符：顿号、逗号、斜杠、英文 or、加号
+    例如：
+    - "油、盐、生抽" -> ["油", "盐", "生抽"]
+    - "白醋/米醋" -> ["白醋", "米醋"]
+    - "黑虎虾 or 明虾" -> ["黑虎虾", "明虾"]
+    - "肉蟹 1 只  份数" -> ["肉蟹"]
+    - "葱 = 一根大葱" -> ["葱"]
+    """
+    if not name or not isinstance(name, str):
+        return []
+
+    # 替换替代分隔符为顿号
+    text = re.sub(r'\s+or\s+', '、', name, flags=re.IGNORECASE)
+    text = re.sub(r'\s*/\s*', '、', text)
+    text = re.sub(r'\s*\+\s*', '、', text)
+
+    # 按分隔符拆分
+    parts = re.split(r'[、，,]', text)
+
+    results = []
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+
+        # 去掉前缀标记（主料、辅料、必备、可选等）
+        part = re.sub(r'^(主料|辅料|必备|可选|必选|工具)[：:]?\s*', '', part, flags=re.IGNORECASE)
+
+        # 去掉括号及内容
+        part = re.sub(r'[（(][^)）]*[)）]', '', part)
+
+        # 去掉 = 或 : 后面的内容（保留前面作为食材名）
+        m = re.search(r'[:=：＝]', part)
+        if m and m.start() > 0:
+            part = part[:m.start()].strip()
+
+        # 过滤注释行
+        if re.match(r'^注[：:]?', part):
+            continue
+
+        # 过滤纯数字
+        if re.match(r'^\d+(\.\d+)?$', part):
+            continue
+
+        # 过滤纯操作/状态词
+        skip_patterns = [
+            r'小火', r'中火', r'大火', r'文火', r'武火',
+            r'三成热', r'五成热', r'七成热', r'八成热',
+            r'油温', r'少许', r'适量', r'若干', r'备用', r'待用',
+            r'根据口味', r'根据喜好', r'^等等$', r'^约$', r'^左右$',
+        ]
+        if any(re.search(p, part) for p in skip_patterns):
+            continue
+
+        # 去掉尾部阿拉伯数字+单位/量词
+        part = re.sub(
+            r'\s+\d[\d\s\.\-/~×xX\+\=]*[gmlkL个只份勺瓶包袋盒罐条根片块头尾把株颗粒碗盘杯张件套双打捆扎斤两钱吨磅cm毫米微米纳米]?$',
+            '', part, flags=re.IGNORECASE
+        )
+        # 去掉尾部中文数字+常见量词
+        part = re.sub(
+            r'\s+[一二两三四五六七八九十百千万亿]+[个只份勺瓶包袋盒罐条根片块头尾把株颗粒碗盘杯张件套双]+$',
+            '', part
+        )
+        # 去掉尾部常见量词/描述
+        part = re.sub(r'\s+(份数|适量|少许|若干|备用|待用|约|左右)$', '', part)
+
+        part = part.strip()
+        if part and len(part) >= 1:
+            results.append(part)
+
+    return results
+
+
+def parse_ingredient_line(line: str) -> List[Ingredient]:
+    """解析食材行，复合食材会被拆分为多个 Ingredient"""
     line = line.strip().lstrip('- ').lstrip('* ')
     if not line:
-        return None
-    
+        return []
+
     # 检测是否可选
     is_optional = '可选' in line or '推荐' in line
-    
+
     # 提取备注（括号内的内容）
     note = ""
     note_match = re.search(r'[（(]([^)）]+)[)）]', line)
     if note_match:
         note = note_match.group(1)
         line = line[:note_match.start()] + line[note_match.end():]
-    
+
     # 解析食材名和用量
     # 尝试匹配 "食材名 数量单位" 的格式
     amount_patterns = [
         r'^(.+?)\s+(\d+[\d\s\-~—]*(?:\.\d+)?\s*(?:g|克|kg|千克|ml|毫升|L|升|个|只|根|片|瓣|勺|汤匙|茶匙|杯|碗|滴|粒|块|条|包|把|罐|瓶|根|头|朵|束|盒|袋|根|颗|节|斤|两|斤|盎司|磅|cup|tbsp|tsp|oz|lb|ml|g|kg|个|cm|毫米|斤))$',
         r'^(.+?)\s+([\d\-~—]+\s*(?:g|克|kg|ml|毫升|L|个|只|根|片|瓣|勺|杯|碗|滴|粒|块|条|包|把|罐|瓶|头|朵|束|盒|袋|颗|节|斤|两))$',
     ]
-    
-    name = line.strip()
+
+    raw_name = line.strip()
     amount = ""
-    
+
     for pattern in amount_patterns:
         match = re.match(pattern, line, re.IGNORECASE)
         if match:
-            name = match.group(1).strip()
+            raw_name = match.group(1).strip()
             amount = match.group(2).strip()
             break
-    
+
     # 清理名称中的特殊标记
-    name = re.sub(r'[*\[\]`]', '', name).strip()
-    
-    # 跳过纯工具项
-    if name in TOOLS_BLACKLIST or len(name) < 1:
-        return None
-    
-    return Ingredient(
-        name=name,
-        amount=amount,
-        is_optional=is_optional,
-        note=note
-    )
+    raw_name = re.sub(r'[*\[\]`]', '', raw_name).strip()
+
+    # 拆分复合食材
+    names = split_composite_ingredient(raw_name)
+
+    results = []
+    for name in names:
+        # 跳过纯工具项
+        if name in TOOLS_BLACKLIST or len(name) < 1:
+            continue
+
+        results.append(Ingredient(
+            name=name,
+            amount=amount,
+            is_optional=is_optional,
+            note=note
+        ))
+
+    return results
 
 
 def parse_recipe_file(filepath: str, category_en: str) -> Optional[Recipe]:
@@ -263,14 +348,13 @@ def parse_recipe_file(filepath: str, category_en: str) -> Optional[Recipe]:
             if is_tool and len(item) < 10:
                 tools.append(item)
             else:
-                ing = parse_ingredient_line(stripped)
-                if ing and ing.name not in [i.name for i in ingredients]:
-                    ingredients.append(ing)
+                for ing in parse_ingredient_line(stripped):
+                    if ing.name not in [i.name for i in ingredients]:
+                        ingredients.append(ing)
         
         # 解析计算部分（更精确的用量）
         elif current_section == 'calculation' and stripped.startswith('- '):
-            ing = parse_ingredient_line(stripped)
-            if ing:
+            for ing in parse_ingredient_line(stripped):
                 # 更新已有食材的用量或添加新食材
                 existing = next((i for i in ingredients if i.name == ing.name or ing.name in i.name or i.name in ing.name), None)
                 if existing:

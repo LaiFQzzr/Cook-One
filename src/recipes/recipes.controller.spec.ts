@@ -24,6 +24,12 @@ describe('RecipesController', () => {
       ingredients: [],
       steps: [],
     }),
+    getRecipeIngredients: jest.fn().mockResolvedValue({
+      recipeId: '1',
+      ingredients: [
+        { id: 1, name: '猪肉', amount: '200g', is_optional: false, note: '' },
+      ],
+    }),
     getRecipesByCategory: jest.fn().mockResolvedValue([
       { name: '荤菜', count: 10, recipes: [] },
     ]),
@@ -112,6 +118,17 @@ describe('RecipesController', () => {
       const result = await controller.getRecipeById('1');
       expect(service.getRecipeById).toHaveBeenCalledWith('1');
       expect(result.name).toBe('菜1');
+    });
+  });
+
+  describe('getRecipeIngredients', () => {
+    it('should return ingredients for a recipe', async () => {
+      const result = await controller.getRecipeIngredients('1');
+      expect(service.getRecipeIngredients).toHaveBeenCalledWith('1');
+      expect(result.recipeId).toBe('1');
+      expect(result.ingredients.length).toBe(1);
+      expect(result.ingredients[0].name).toBe('猪肉');
+      expect(result.ingredients[0].amount).toBe('200g');
     });
   });
 });

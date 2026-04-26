@@ -41,7 +41,7 @@ export class AuthService {
     try {
       await this.achievementsService.initUserAchievements(user.id);
     } catch (e) {
-      // 成就初始化失败不影响注册主流程
+      console.error("成就初始化失败不影响注册主流程");
     }
 
     return { message: '注册成功', userId: user.id };
